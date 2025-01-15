@@ -1,13 +1,13 @@
 # Main makefile
 
-# Did the user tell us to use a particular machine? If so, use that.
-ifdef MACHINE
-     include Make.mach.$(MACHINE)
+# Did the user tell us to use a particular system? If so, use that.
+ifdef SYSTEM
+     include Make.mach.$(SYSTEM)
 else
      # Machine not specified, so try to guess
      UNAME		= $(shell uname)
      UNAMEN		= $(shell uname -n)
-
+	 
      # Do we have a makefile that matches the machine name? If so, use
      # that. If not, use a generic makefile depending on the OS.
      ifeq ($(UNAMEN), morticia.anu.edu.au)

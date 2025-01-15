@@ -25,7 +25,7 @@ chemistry network for a cloud.
 ########################################################################
 
 import numpy as np
-from scipy.integrate import odeint
+from scipy.integrate import odeint, solve_ivp
 from despotic.despoticError import despoticError
 from .abundanceDict import abundanceDict
 from copy import deepcopy
@@ -151,8 +151,19 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
 
         # Simplest case: fixed temperature, so just evolve the
         # chemical network alone
-        xOut = odeint(cloud.chemnetwork.dxdt, cloud.chemnetwork.x,
-                      tOut1)
+
+        #xOut = odeint(cloud.chemnetwork.dxdt, cloud.chemnetwork.x,
+        #              tOut1)
+        
+        dxdt_wrapped = lambda t, y: cloud.chemnetwork.dxdt(y,t)
+        xOut = solve_ivp(
+            fun=dxdt_wrapped,               # ODE function
+            t_span=(tOut1[0], tOut1[-1]),   # Time span
+            y0=cloud.chemnetwork.x,         # Initial conditions
+            t_eval=tOut1,                   # Points to evaluate the solution
+            method="BDF"
+        ).y.T
+        
 
     elif evolveTemp == 'gasEq':
 
@@ -162,8 +173,12 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
         # defined below
         dxdtwrap = _dxdt_wrapper(cloud, isobar, gasOnly=True, 
                                  tempEqParam=tempEqParam)
-        xOut = odeint(dxdtwrap.dxdt_Teq, cloud.chemnetwork.x, tOut1)
+        #xOut = odeint(dxdtwrap.dxdt_Teq, cloud.chemnetwork.x, tOut1)
 
+        dxdt_wrapped = lambda t, y: dxdtwrap.dxdt_Teq(y,t)
+        xOut = solve_ivp(dxdt_wrapped,(tOut1[0], tOut1[-1]),cloud.chemnetwork.x,
+                         t_eval=tOut1,method="BDF").y.T
+        
         # Go back and compute the equilibrium gas temperature at each
         # of the requested output times
         Tg = np.zeros(len(tOut1))
@@ -182,8 +197,12 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
         # temperature to equilibrium
         dxdtwrap = _dxdt_wrapper(cloud, isobar, gasOnly=False,
                                  tempEqParam=tempEqParam)
-        xOut = odeint(dxdtwrap.dxdt_Teq, cloud.chemnetwork.x, tOut1)
-
+        #xOut = odeint(dxdtwrap.dxdt_Teq, cloud.chemnetwork.x, tOut1)
+        
+        dxdt_wrapped = lambda t, y: dxdtwrap.dxdt_Teq(y,t)
+        xOut = solve_ivp(dxdt_wrapped,(tOut1[0], tOut1[-1]),cloud.chemnetwork.x,
+                         t_eval=tOut1,method="BDF").y.T
+        
         # Go back and compute the equilibrium gas and dust
         # temperatures at each of the requested output times
         Tg = np.zeros(len(tOut1))
@@ -206,7 +225,12 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
                                  tempEqParam=tempEqParam,
                                  dEdtParam=dEdtParam)
         xTInit = np.append(cloud.chemnetwork.x, cloud.Tg)
-        xTOut = odeint(dxdtwrap.dxTdt, xTInit, tOut1)
+        #xTOut = odeint(dxdtwrap.dxTdt, xTInit, tOut1)
+        
+        dxdt_wrapped = lambda t, y: dxdtwrap.dxTdt(y,t)
+        xTOut = solve_ivp(dxdt_wrapped,(tOut1[0], tOut1[-1]),xTInit,
+                         t_eval=tOut1,method="BDF").y.T
+        
         xOut = xTOut[:,:-1]
         Tg = xTOut[:,-1]
 

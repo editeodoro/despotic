@@ -1,8 +1,10 @@
-__version__ = '2.2'
+__version__ = '2.2.0'
 __all__ = ["cloud", "collPartner", "composition", "despoticError",
            "dustProp", "emitter", "emitterData", "fetchLamda",
            "lineProfLTE", "radiation", "refreshLamda",
            "zonedcloud"]
+
+version = __version__+'_EDT'
 
 # Import the classes and functions from the files of the same
 # name. This allows users to access the classes and functions
