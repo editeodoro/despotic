@@ -1,4 +1,5 @@
-This is my version of DESPOTIC: https://bitbucket.org/krumholz/despotic
+This is my own version of DESPOTIC: https://bitbucket.org/krumholz/despotic
+
 All credits to Mark Krumholz. 
 
 DESPOTIC
