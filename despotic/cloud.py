@@ -1777,7 +1777,8 @@ class cloud(object):
                        (1.0 + 0.375*tauDust)
         if intOnly == True:
             return intIntensity
-
+        
+        ###### THIS IS THE OLD, INCORRECT WAY ##############################
         # Step 5. Convert to velocity-integrated brightness
         # temperature; note the division by 10^5 to convert from cm
         # s^-1 to km s^-1; also not the special handling of negative
@@ -1786,20 +1787,35 @@ class cloud(object):
         # these negative brightness temperatures, with a magnitude
         # equal to the brightness temperature of the absolute value of
         # the intensity
-        intIntensityMask = intIntensity.copy()
-        intIntensityMask[intIntensity <= 0] = small
-        TB = h*self.emitters[emitName].data.freq[u,l]/kB / \
-            np.log(1+2*h*em.data.freq[u,l]**3 / (c**2*intIntensityMask)) * \
-                    c / (em.data.freq[u,l]) \
-                    / 1e5
-        TB[intIntensity == 0] = 0.0
-        mask = np.where(intIntensity < 0)
-        TB[mask] = \
-            -h*self.emitters[emitName].data.freq[u[mask],l[mask]]/kB / \
-            np.log(1+2*h*em.data.freq[u[mask],l[mask]]**3 / \
-                    (-c**2*intIntensity[mask])) * \
-                    c / (em.data.freq[u[mask],l[mask]]) \
-                    / 1e5
+        # intIntensityMask = intIntensity.copy()
+        # intIntensityMask[intIntensity <= 0] = small
+        # TB = h*self.emitters[emitName].data.freq[u,l]/kB / \
+        #    np.log(1+2*h*em.data.freq[u,l]**3 / (c**2*intIntensityMask)) * \
+        #            c / (em.data.freq[u,l]) \
+        #            / 1e5
+        # TB[intIntensity == 0] = 0.0
+        # mask = np.where(intIntensity < 0)
+        # TB[mask] = \
+        #    -h*self.emitters[emitName].data.freq[u[mask],l[mask]]/kB / \
+        #    np.log(1+2*h*em.data.freq[u[mask],l[mask]]**3 / \
+        #            (-c**2*intIntensity[mask])) * \
+        #            c / (em.data.freq[u[mask],l[mask]]) \
+        #            / 1e5
+        #if TBOnly == True:
+        #    return TB
+        ############################################################   
+        
+        # Step 5. Convert to velocity-integrated brightness
+        # temperature; the conversion here is obtained by
+        # approximating the line shape as a delta function, and then
+        # working out the relationshp between velocity-integrated
+        # brightness temperature and integrated intensity for a delta
+        # function line shape -- credit to Enrico di Teodoro for
+        # catching a conceptual error in the original implementation
+        TB = c**3 * intIntensity / \
+             (2 * kB * self.emitters[emitName].data.freq[u,l]**3)
+        # Divide by 10^5 to convert from K cm/s to K km/s
+        TB = TB / 1e5
         if TBOnly == True:
             return TB
 

@@ -104,6 +104,6 @@ class radiation:
         # Return value, written in such a way as to produce underflows
         # rather than overflows when Tnu >> TCMB
         expfac = np.exp(-Tnu/self.TCMB)
-        expfacdust = np.exp(-Tnu/self.TradDust)
+        expfacdust = np.exp(-Tnu/(self.TradDust+1e-300))
         return expfac / (1.0 - expfac) + \
             self.fdDilute * expfacdust / (1.0 - expfacdust)
