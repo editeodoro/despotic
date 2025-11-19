@@ -26,6 +26,7 @@ from .dustProp import dustProp
 from .despoticError import despoticError
 from copy import deepcopy
 import scipy.constants as physcons
+from scipy.integrate import simpson
 mH = physcons.m_p*1e3
 kB = physcons.k*1e7
 G = physcons.G*1e3
@@ -673,7 +674,7 @@ class zonedcloud(object):
                 transition=None, thin=False, intOnly=False,
                 TBOnly=False, lumOnly=False,
                 escapeProbGeom=None, dampFactor=0.5,
-                noRecompute=False, abstol=1.0e-8,
+                noRecompute=False, lumWgtMethod='area',
                 verbose=False):
         """
         Return the frequency-integrated intensity of various lines,
@@ -724,6 +725,18 @@ class zonedcloud(object):
            noRecompute : False
               if True, level populations and escape probabilities are
               not recomputed; instead, stored values are used
+           lumWgtMethod : 'area' | 'light'
+              weighting method to use when defining the integrated
+              intensity and velocity-integrated brightness temperature.
+              Because these quantities are not uniform across a
+              spherical zoned cloud, one can obtain a single, averaged
+              value in multiple ways. The default choice, 'area', is an
+              area-weighted average computed over the full
+              cross-sectional area of the cloud; the alternative,
+              'light', returns a light-weighted average, and may be
+              more appropriate for an emitter for which emission is
+              confined to a small part of the zonedcloud. This option
+              has no effect for slab geometry.
 
         Returns
            res : list or array
@@ -766,108 +779,166 @@ class zonedcloud(object):
         if escapeProbGeom is None:
             escapeProbGeom = self.geometry
 
-        # Compute zone by zone luminosity
-        zoneLum = [z.lineLum(emitName, LTE=LTE, noClump=noClump,
-                             transition=transition, thin=thin,
-                             intOnly=intOnly, TBOnly=TBOnly,
-                             lumOnly=lumOnly,
-                             escapeProbGeom=escapeProbGeom,
-                             dampFactor=dampFactor,
-                             noRecompute=noRecompute) 
-                   for z in self.zones]
+        # Compute zone by zone emission
+        zoneLL = [z.lineLum(emitName, LTE=LTE, noClump=noClump,
+                            transition=transition, thin=thin,
+                            escapeProbGeom=escapeProbGeom,
+                            dampFactor=dampFactor,
+                            noRecompute=noRecompute) 
+                  for z in self.zones]
 
-        # Combine zones
-        if intOnly:
+        # Here we differentiate by whether the geometry is slab or
+        # spherical
+        if self.geometry == 'slab':
 
-            # Integrated intensities have been computed assuming each
-            # zone is a sphere, when in fact it is a hollow shell or
-            # slab; we therefore need to correct for this. Our
-            # strategy is to turn the intensities back into
-            # luminosities, mass-weight them, then turn them back into
-            # an intensity using the overall column for the total cloud
-            zoneInt = np.array(zoneLum)
-            mass = self.mass()
-            zoneCol = np.array([z.colDen for z in self.zones])
-            lumPerH_zone = np.transpose(zoneInt) / zoneCol
-            lumPerH = np.sum(mass*lumPerH_zone, axis=1) \
-                      / np.sum(mass)
-            return lumPerH * self.colDen[-1]
+            # Slab case; in this case the mass of a zone is undefined,
+            # and the ratio of number of atoms in each zone is simply
+            # proportional to the column density edges
 
-        elif TBOnly:
+            # First get the luminosity per unit area of each zone
+            zoneColDen = self._colDen[1:] - self._colDen[-1:]
+            zoneLumPerArea = np.array([
+                np.array([zLL[i]['lumPerH'] for zLL in zoneLL]) * zoneColDen
+                for i in range(len(zoneLL[0])) ] )
 
-            # For velocity-integrated brightness temperatures, we need
-            # to back out the intensity, sum the intensities as for
-            # the intensity case, then turn back into a brightness
-            # temperature
-            intTB = np.array(zoneLum)
-            if transition is None:
-                u = self.zones[0].emitters[emitName].data.radUpper
-                l = self.zones[0].emitters[emitName].data.radLower
-            else:
-                u = transition[0]
-                l = transition[1]
-            freq = self.zones[0].emitters[emitName].data.freq[u,l]
-            zoneInt \
-                = 2*h*freq**3/(c**2 * (np.exp(h*c/(kB*intTB*1e5)) - 1.0))
-            mass = self.mass()
-            zoneCol = np.array([z.colDen for z in self.zones])
-            lumPerH_zone = np.transpose(zoneInt) / zoneCol
-            lumPerH = np.sum(mass*lumPerH_zone, axis=1) \
-                      / np.sum(mass)
-            intIntensity = lumPerH * self.colDen[-1]
-            intTB = h*c/kB / \
-                    np.log(1.0 + 2.0*h*freq**3/(c**2*intIntensity)) / 1e5
-            return intTB
+            # Get the luminosity per H, summing over zones
+            lumPerH = np.sum(zoneLumPerArea, axis=1) / np.sum(zoneColDen)
+            if lumOnly:
+                return lumPerH
 
-        elif lumOnly:
+            # Get the dust-attenuated luminosity of each line in each
+            # zone
+            freq = np.array([zLL['freq'] for zLL in zoneLL[0]])
+            tauDust = self.dust.sigma10 * \
+                np.outer((freq / (10*kB/h))**self.dust.beta, self.colDen)
+            zoneLumPerAreaAtt = zoneLumPerArea * np.exp(-tauDust)
 
-            # For luminosity per H, we need to mass-weight
-            lumPerH = np.array(zoneLum)
-            mass = self.mass()
-            return np.sum(mass*np.transpose(lumPerH), axis=1) \
-                / np.sum(mass)
+            # Integrated intensity is just the sum of the luminosity
+            # per unit area over all zones, divided by 4 pi
+            intIntensity = np.sum(zoneLumPerAreaAtt, axis=1) / \
+                (4*np.pi)
+            if intOnly:
+                return True
+
+            # Convert intensity to brightness temperature
+            intTB = c**3 * intIntensity / (2 * kB * freq**3) / 1e5
 
         else:
 
-            # Returning full output, use each of the procedures above
-            lineLum = zoneLum[0]
+            # Spherical geometry            
+        
+            # To put the zones together, first get the total luminosity
+            # summed over them, by adding up the luminosity per H
+            # multiplied by the number of hydrogens in each zone, for each
+            # transition
+            zoneHNum = self.mass() / (self.muH * mH)
+            zoneLum = np.array([
+                np.array([zLL[i]['lumPerH'] for zLL in zoneLL]) * zoneHNum
+                for i in range(len(zoneLL[0])) ] )
 
-            # Derive luminosity per unit mass by mass-weighing zones
-            lumPerH = np.array(
-                [[x['lumPerH'] for x in z] for z in zoneLum])
-            mass = self.mass()
-            lumPerH = np.sum(mass*np.transpose(lumPerH), axis=1) \
-                      / np.sum(mass)
-            for l, t in zip(lineLum, lumPerH):
-                l['lumPerH'] = t            
+            # Get the luminosity per H, summing over zones
+            lumPerH = np.sum(zoneLum, axis=1) / np.sum(zoneHNum)
+            if lumOnly:
+                return lumPerH
+
+            # Get dust-attenuated luminosity of each line in each zone
+            freq = np.array([zLL['freq'] for zLL in zoneLL[0]])
+            tauDust = self.dust.sigma10 * \
+                np.outer((freq / (10*kB/h))**self.dust.beta, self.colDen)
+            zoneLumAtt = zoneLum * np.exp(-tauDust)
+
+            # Get the integrated intensity; this is handled differently
+            # depending on the weighting we are using
+            if lumWgtMethod == 'area':
+
+                # Default: area weighting. In this case we take the
+                # integrated intensity to be luminosity / cloud area / 4
+                # pi, and derive the velocity-integrated brightness
+                # temperature from that
+                intIntensity = np.sum(zoneLumAtt, axis=1) / (4 * np.pi) / \
+                    (np.pi * self.radius(edge=True)[0]**2)
                 
-            # Intensities just add
-            intIntensity = np.array(
-                [[x['intIntensity'] for x in z] for z in zoneLum])
-            zoneCol = np.array([z.colDen for z in self.zones])
-            lumPerH_zone = np.transpose(intIntensity) / zoneCol
-            lumPerH = np.sum(mass*lumPerH_zone, axis=1) \
-                      / np.sum(mass)
-            for l, t in zip(lineLum, lumPerH):
-                l['intIntensity'] = t * self.colDen[-1]
+            elif lumWgtMethod == 'light':
 
-            # Derive velocity-integrated brightness temperature from
-            # intensity
-            freq = np.array([x['freq'] for x in zoneLum[0]])
-            for l, f in zip(lineLum, freq):
-                l['intTB'] = h*c/kB / \
-                             np.log(1.0 + 2.0*h*f**3/
-                                    (c**2*l['intIntensity'])) \
-                             / 1e5
+                # Light-weighted average. In this case we envision the
+                # cloud as a nested series of spherical shells, each
+                # with a uniform luminosity per unit volume L_V. From this
+                # geometry, we can compute the light emitted per unit
+                # area at a projected distance x from the cloud
+                # center, L_A(x) = \int L_V dz, where the integral is
+                # along the line of sight through the cloud. We then
+                # define the light-weighed luminosity per unit area as
+                # (1/Ltot) \int L_A(x)^2 2 pi x dx, where Ltot is the
+                # total cloud luminosity. The integral is in principle
+                # possible to evaluate analytically, but the
+                # expressions get incredibly nasty for an arbitrary
+                # number of zones, so we handle this by a simple
+                # quadrature estimate.
+                rz = self.radius(edge=True)
+                zoneLumPerVol = zoneLumAtt / \
+                    (4./3 * np.pi * (rz[:-1]**3 - rz[1:]**3))
+                intL2 = 0
+                nz = len(rz)-1
+                
+                # Loop over zones to evaluate integrals
+                for i in range(nz):
 
-            # Excitation temperatues and optical depths really only
-            # make sense zone by zone, so we return these as arrays
-            for i, l in enumerate(lineLum):
-                l['Tex'] = np.array([z[i]['Tex'] for z in zoneLum])
-                l['tau'] = np.array([z[i]['tau'] for z in zoneLum])
+                    # Generate sample point within this zone
+                    rsamp = np.linspace(rz[i+1], rz[i], 64)
 
-            # Return
-            return lineLum
+                    # Get luminosity per unit area at this projected
+                    # radius, including contribution from all zones
+                    # through which the LOS passes
+                    LperA = np.outer(zoneLumPerVol[:,i],
+                                     2 * np.sqrt(rz[i]**2 - rsamp**2))
+                    for j in range(i):
+                        LperA += np.outer(
+                            zoneLumPerVol[:,j],
+                            2 * (np.sqrt(rz[j]**2 - rsamp**2) -
+                                 np.sqrt(rz[j+1]**2 - rsamp**2))
+                            )
+
+                    # Evaluate the contribution to this integral via
+                    # Simpson's rule
+                    intL2 += 2 * np.pi * simpson(LperA**2 * rsamp,
+                                                 x=rsamp)
+                        
+                # Compute final integrated intensity
+                intIntensity = intL2 / np.sum(zoneLumAtt, axis=1) / (4 * np.pi)
+
+            else:
+
+                raise ValueError("unknown lumWgtMethod: {:s}".
+                                 format(lumWgtMethod))
+
+                
+            # Return integrate intensity if that's all we want
+            if intOnly == True:
+                return intIntensity
+
+            # Convert to brightness temperature
+            intTB = c**3 * intIntensity / (2 * kB * freq**3) / 1e5
+            if TBOnly == True:
+                return intTB
+ 
+        # Pack results into a dict in the same shape we return for a
+        # single zone cloud
+        ret = deepcopy(zoneLL[0])
+        nline = len(ret)
+        for i in range(nline):
+
+            # Quantities that we have summed
+            ret[i]['lumPerH'] = lumPerH[i]
+            ret[i]['intIntensity'] = intIntensity[i]
+            ret[i]['intTB'] = intTB[i]
+
+            # Quantities that only make sense zone-by-zone
+            ret[i]['tauDust'] = tauDust[i]
+            ret[i]['tau'] = np.array([ zLL[i]['tau'] for zLL in zoneLL ])
+            ret[i]['Tex'] = np.array([ zLL[i]['Tex'] for zLL in zoneLL ])
+               
+        # Return
+        return ret
 
 
     ####################################################################

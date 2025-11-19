@@ -34,7 +34,8 @@ kB = physcons.k*1e7
 
 def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
              tOut=None, network=None, info=None,
-             addEmitters=False, evolveTemp='fixed',
+             addEmitters=False, energySkip=None,
+             evolveTemp='fixed',
              isobaric=False, tempEqParam=None,
              dEdtParam=None):
     """
@@ -70,6 +71,12 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
           be added; if False, abundances of emitters already in the
           emitter list will be updated, but new emiters will not be
           added to the cloud
+       energySkip : None | list
+          any emitter in the energySkip list will be added to the
+          cloud with its energySkip parameter set to True, meaning
+          that the species will be omitted for the purposes of
+          calculating cloud heating and cooling (but that one can
+          still compute emission from it)
        evolveTemp : 'fixed' | 'gasEq' | 'fullEq' | 'evol'
           how to treat the temperature evolution during the chemical
           evolution; 'fixed' = treat tempeature as fixed; 'gasEq' = hold
@@ -151,7 +158,6 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
 
         # Simplest case: fixed temperature, so just evolve the
         # chemical network alone
-
         #xOut = odeint(cloud.chemnetwork.dxdt, cloud.chemnetwork.x,
         #              tOut1)
         
@@ -163,7 +169,6 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
             t_eval=tOut1,                   # Points to evaluate the solution
             method="BDF"
         ).y.T
-        
 
     elif evolveTemp == 'gasEq':
 
@@ -184,7 +189,11 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
         Tg = np.zeros(len(tOut1))
         for i in range(Tg.size):
             cloud.chemnetwork.x = xOut[i,:]
-            cloud.chemnetwork.applyAbundances()
+            cloud.chemnetwork.applyAbundances(addEmitters=addEmitters)
+            if energySkip is not None:
+                for k in energySkip:
+                    if k in cloud.emitters.keys():
+                        cloud.emitters[k].energySkip = True
             if tempEqParam is not None:
                 cloud.setGasTempEq(**tempEqParam)
             else:
@@ -209,7 +218,11 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
         Td = np.zeros(len(tOut1))
         for i in range(Tg.size):
             cloud.chemnetwork.x = xOut[i,:]
-            cloud.chemnetwork.applyAbundances()
+            cloud.chemnetwork.applyAbundances(addEmitters=addEmitters)
+            if energySkip is not None:
+                for k in energySkip:
+                    if k in cloud.emitters.keys():
+                        cloud.emitters[k].energySkip = True
             if tempEqParam is not None:
                 cloud.setTempEq(**tempEqParam)
             else:
@@ -225,12 +238,10 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
                                  tempEqParam=tempEqParam,
                                  dEdtParam=dEdtParam)
         xTInit = np.append(cloud.chemnetwork.x, cloud.Tg)
-        #xTOut = odeint(dxdtwrap.dxTdt, xTInit, tOut1)
-        
+        #xTOut = odeint(dxdtwrap.dxTdt, xTInit, tOut1)        
         dxdt_wrapped = lambda t, y: dxdtwrap.dxTdt(y,t)
         xTOut = solve_ivp(dxdt_wrapped,(tOut1[0], tOut1[-1]),xTInit,
-                         t_eval=tOut1,method="BDF").y.T
-        
+                          t_eval=tOut1,method="BDF").y.T
         xOut = xTOut[:,:-1]
         Tg = xTOut[:,-1]
 
@@ -239,7 +250,11 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
         Td = np.zeros(Tg.size)
         for i in range(Tg.size):
             cloud.chemnetwork.x = xOut[i,:]
-            cloud.chemnetwork.applyAbundances()
+            cloud.chemnetwork.applyAbundances(addEmitters=addEmitters)
+            if energySkip is not None:
+                for k in energySkip:
+                    if k in cloud.emitters.keys():
+                        cloud.emitters[k].energySkip = True
             if tempEqParam is not None:
                 cloud.setDustTempEq(**tempEqParam)
             else:
@@ -256,6 +271,10 @@ def chemEvol(cloud, tFin, tInit=0.0, nOut=100, dt=None,
 
     # Write final abundances back to cloud
     cloud.chemnetwork.applyAbundances(addEmitters=addEmitters)
+    if energySkip is not None:
+        for k in energySkip:
+            if k in cloud.emitters.keys():
+                cloud.emitters[k].energySkip = True
 
     # If the final time was not one of the requested output times,
     # chop it off the data to be returned

@@ -956,7 +956,17 @@ class emitter(object):
                 bred = np.zeros(len(levKeep)+1)
                 bred[-1] = 1.0
                 #levPop, res, rank, s = np.linalg.lstsq(mred, bred)
-                levPop, res = nnls(mred, bred)
+                try:
+                    levPop, res = nnls(mred, bred)
+                except Exception as err:
+                    try:
+                        # The lstsq routine is slower but seems to be
+                        # more robust, so try it if nnls fails
+                        levPop, res, rank, s = np.linalg.lstsq(mred, bred)
+                    except Exception as err: 
+                        print("Convergence failure for {:s}, abundance = {:e}".
+                              format(self.name, self.abundance))
+                        raise err
                 self.levPop[levKeep] = levPop
                 self.levPop[levDel] = 0.0
 

@@ -777,7 +777,7 @@ class cloud(object):
     # Method to calculate instantaneous values of all heating, cooling
     # terms
     ####################################################################
-    def dEdt(self, c1Grav=0.0, thin=False, LTE=False, 
+    def dEdt(self, c1Grav=0.0, c1Turb=0.0, thin=False, LTE=False, 
              fixedLevPop=False, noClump=False, 
              escapeProbGeom='sphere', PsiUser=None, 
              sumOnly=False, dustOnly=False, gasOnly=False, 
@@ -789,8 +789,13 @@ class cloud(object):
         Parameters
            c1Grav : float
               if this is non-zero, the cloud is assumed to be
-              collapsing, and energy is added at a rate
+              collapsing, and energy is added at a rate per H nucleus
               Gamma_grav = c1 mu_H m_H cs^2 sqrt(4 pi G rho)
+           c1Turb : float
+              if this is non-zero, the cloud is assumed to be
+              heated by turbulent dissipation, and energy is
+              added at a rate per H nucleus
+              Gamma_turb = c1 sigmaNT^3 mu_H m_H nH / colden
            thin : Boolean
               if set to True, cloud is assumed to be opticall thin
            LTE : Boolean
@@ -860,6 +865,8 @@ class cloud(object):
               cosmic ray heating rate
            GammaGrav : float
               gravitational contraction heating rate
+           GammaTurb : float
+              turbulent dissipation heating rate
            LambdaLine : dict
               cooling rate from lines; dictionary keys correspond to
               species in the emitter list, values give line cooling
@@ -891,7 +898,6 @@ class cloud(object):
         """
 
         # Make sure composition-derived quantities are initialized
-        #import pdb; pdb.set_trace()
         if self.comp.mu == 0.0:
             self.comp.computeDerived(self.nH)
 
@@ -913,6 +919,10 @@ class cloud(object):
             GammaGrav = c1Grav * kB * self.Tg / (self.comp.mu * mH) * \
                 (4 * np.pi * G * self.nH * self.comp.muH * mH) * \
                 self.comp.muH * mH
+
+            # Turbulent heating rate
+            GammaTurb = c1Turb * self.sigmaNT**3 * self.comp.muH * mH * \
+                self.nH / self.colDen
 
             # Cosmic ray heating rate
             GammaCR = self.rad.ionRate * self.comp.qIon
@@ -1094,6 +1104,7 @@ class cloud(object):
             if dustOnly == False and dustCoolOnly == False:
                 rates['GammaPE'] = GammaPE
                 rates['GammaGrav'] = GammaGrav
+                rates['GammaTurb'] = GammaTurb
                 rates['GammaCR'] = GammaCR
                 rates['LambdaLine'] = LambdaLine
                 rates['LambdaLyA'] = LambdaLyA
@@ -1115,11 +1126,13 @@ class cloud(object):
             rates['PsiGD'] = PsiGD
         else:
             if dustOnly == False and dustCoolOnly == False:
-                rates['dEdtGas'] = GammaPE + GammaGrav + GammaCR - \
+                rates['dEdtGas'] = GammaPE + GammaGrav + \
+                    GammaTurb + GammaCR - \
                     sum(LambdaLine.values()) - LambdaLyA \
                     - LambdaLyB - Lambda2p + PsiGD + PsiUserVal[0]
                 rates['maxAbsdEdtGas'] = \
-                    max(abs(GammaPE), abs(GammaGrav), abs(GammaCR),
+                    max(abs(GammaPE), abs(GammaGrav),
+                        abs(GammaTurb), abs(GammaCR),
                         abs(sum(LambdaLine.values())),
                         abs(LambdaLyA), abs(LambdaLyB), abs(Lambda2p),
                         abs(PsiGD), abs(PsiUserVal[0]))
@@ -1266,7 +1279,8 @@ class cloud(object):
     # Method to calculate equilibrium gas temperature for dust gas
     # temperature
     ####################################################################
-    def setGasTempEq(self, c1Grav=0.0, thin=False, noClump=False,
+    def setGasTempEq(self, c1Grav=0.0, c1Turb=0.0,
+                     thin=False, noClump=False,
                      LTE=False, Tginit=None, fixedLevPop=False,
                      escapeProbGeom='sphere', PsiUser=None,
                      verbose=False):
@@ -1276,8 +1290,13 @@ class cloud(object):
         Parameters
            c1Grav : float
               if this is non-zero, the cloud is assumed to be
-              collapsing, and energy is added at a rate
+              collapsing, and energy is added at a rate per H nucleus
               Gamma_grav = c1 mu_H m_H cs^2 sqrt(4 pi G rho)
+           c1Turb : float
+              if this is non-zero, the cloud is assumed to be
+              heated by turbulent dissipation, and energy is
+              added at a rate per H nucleus
+              Gamma_turb = c1 sigmaNT^3 mu_H m_H nH / colden
            thin : Boolean
               if set to True, cloud is assumed to be opticall thin
            LTE : Boolean
@@ -1322,7 +1341,7 @@ class cloud(object):
                 self.Tg = 10.0
 
         # Get initial scaling
-        rates = self.dEdt(c1Grav=c1Grav,
+        rates = self.dEdt(c1Grav=c1Grav, c1Turb=c1Turb,
                           thin=thin, LTE=LTE,
                           escapeProbGeom=escapeProbGeom,
                           gasOnly=True, noClump=noClump,
@@ -1332,13 +1351,13 @@ class cloud(object):
         # Solve for Tg
         try:
             resid1 = _gasTempResid(
-                np.log(Tlo), self, c1Grav, thin, LTE,
+                np.log(Tlo), self, c1Grav, c1Turb, thin, LTE,
                 escapeProbGeom, PsiUser, noClump,
                 lumScale, verbose)
             Thi_in = Thi
             while True:
                 resid2 = _gasTempResid(
-                    np.log(Thi_in), self, c1Grav, thin, LTE,
+                    np.log(Thi_in), self, c1Grav, c1Turb, thin, LTE,
                     escapeProbGeom, PsiUser, noClump,
                     lumScale, verbose)
                 if resid1 * resid2 > 0:
@@ -1348,7 +1367,7 @@ class cloud(object):
             self.Tg = np.exp(
                 brentq(_gasTempResid, np.log(Tlo), 
                        np.log(Thi_in),
-                       args=(self, c1Grav, thin, LTE,
+                       args=(self, c1Grav, c1Turb, thin, LTE,
                              escapeProbGeom, PsiUser,
                              noClump, lumScale, verbose)))
         except (despoticError, RuntimeError):
@@ -1357,7 +1376,7 @@ class cloud(object):
 
         # Check for success and return appropriate value
         if abs(_gasTempResid(
-                np.log(self.Tg), self, c1Grav, thin, LTE,
+                np.log(self.Tg), self, c1Grav, c1Turb, thin, LTE,
                 escapeProbGeom, PsiUser,
                 noClump, lumScale, verbose)) > 1.0e-3:
             return False
@@ -1369,7 +1388,8 @@ class cloud(object):
     # Method to calculate equilibrium gas and dust temperatures
     # simultaneously
     ####################################################################
-    def setTempEq(self, c1Grav=0.0, thin=False, noClump=False,
+    def setTempEq(self, c1Grav=0.0, c1Turb=0.0,
+                  thin=False, noClump=False,
                   LTE=False, Tinit=None, fixedLevPop=False,
                   escapeProbGeom='sphere', PsiUser=None,
                   verbose=False, tol=1e-4):
@@ -1378,7 +1398,14 @@ class cloud(object):
 
         Parameters
            c1Grav : float
-              coefficient for rate of gas gravitational heating
+              if this is non-zero, the cloud is assumed to be
+              collapsing, and energy is added at a rate per H nucleus
+              Gamma_grav = c1 mu_H m_H cs^2 sqrt(4 pi G rho)
+           c1Turb : float
+              if this is non-zero, the cloud is assumed to be
+              heated by turbulent dissipation, and energy is
+              added at a rate per H nucleus
+              Gamma_turb = c1 sigmaNT^3 mu_H m_H nH / colden
            thin : Boolean
               if set to True, cloud is assumed to be opticall thin
            LTE : Boolean
@@ -1423,14 +1450,15 @@ class cloud(object):
         self.setDustTempEq(noClump=noClump, Tdinit=Tinit[1], 
                            PsiUser=PsiUser, verbose=verbose)
         self.setGasTempEq(
-            c1Grav=c1Grav, thin=thin, noClump=noClump,
+            c1Grav=c1Grav, c1Turb=c1Turb, thin=thin, noClump=noClump,
             LTE=LTE, Tginit=Tinit[0], fixedLevPop=fixedLevPop,
             escapeProbGeom=escapeProbGeom, PsiUser=PsiUser,
             verbose=verbose)
         Tinit = np.array([self.Tg, self.Td])
 
         # Get luminosity scaling
-        rates = self.dEdt(c1Grav=c1Grav, thin=thin, LTE=LTE, 
+        rates = self.dEdt(c1Grav=c1Grav, c1Turb=c1Turb,
+                          thin=thin, LTE=LTE, 
                           escapeProbGeom=escapeProbGeom, 
                           sumOnly=True, PsiUser=PsiUser, 
                           noClump=noClump, 
@@ -1441,7 +1469,7 @@ class cloud(object):
 
         # Iterate to get equilibrium temperatures
         res = root(_gdTempResid, np.log(Tinit),
-                   args=(self, c1Grav, thin,
+                   args=(self, c1Grav, c1Turb, thin,
                          LTE, escapeProbGeom, 
                          PsiUser, noClump, lumScale, 
                          verbose), 
@@ -1454,7 +1482,7 @@ class cloud(object):
             Tnew = Tinit * 5.0
             Tnew[Tnew < 50.] = 50.
             res = root(_gdTempResid, np.log(Tnew), 
-                       args=(self, c1Grav, thin, 
+                       args=(self, c1Grav, c1Turb, thin, 
                              LTE, escapeProbGeom, 
                              PsiUser, noClump, lumScale, 
                              verbose), 
@@ -1476,7 +1504,8 @@ class cloud(object):
     # is always in thermal equilibrium, since its equilibration time
     # is small compared to that of the gas.
     ####################################################################
-    def tempEvol(self, tFin, tInit=0.0, c1Grav=0.0, noClump=False,
+    def tempEvol(self, tFin, tInit=0.0, c1Grav=0.0, c1Turb=0.0,
+                 noClump=False,
                  thin=False, LTE=False, fixedLevPop=False,
                  escapeProbGeom='sphere', nOut=100, dt=None,
                  tOut=None, PsiUser=None, isobaric=False,
@@ -1491,7 +1520,14 @@ class cloud(object):
            tInit : float
               start time of integration, in sec
            c1Grav : float
-              coefficient for rate of gas gravitational heating
+              if this is non-zero, the cloud is assumed to be
+              collapsing, and energy is added at a rate per H nucleus
+              Gamma_grav = c1 mu_H m_H cs^2 sqrt(4 pi G rho)
+           c1Turb : float
+              if this is non-zero, the cloud is assumed to be
+              heated by turbulent dissipation, and energy is
+              added at a rate per H nucleus
+              Gamma_turb = c1 sigmaNT^3 mu_H m_H nH / colden
            thin : Boolean
               if set to True, cloud is assumed to be opticall thin
            LTE : Boolean
@@ -1590,7 +1626,7 @@ class cloud(object):
         if fullOutput == False:
             Tgout = \
                 odeint(_gasTempDeriv, self.Tg, tOut1, \
-                           args=(self, c1Grav, thin, LTE, \
+                           args=(self, c1Grav, c1Turb, thin, LTE, \
                                      escapeProbGeom, PsiUser, \
                                      noClump, isobar, dampFactor, \
                                      verbose))
@@ -1600,7 +1636,7 @@ class cloud(object):
                 tvec = [tOut[i], t]
                 Tgtemp = \
                     odeint(_gasTempDeriv, self.Tg, tvec, \
-                               args=(self, c1Grav, thin, LTE, \
+                               args=(self, c1Grav, c1Turb, thin, LTE, \
                                          escapeProbGeom, PsiUser, \
                                          noClump, isobar, \
                                          dampFactor, verbose))
@@ -1610,7 +1646,7 @@ class cloud(object):
         if tOut1[-1] < tFin:
             odeint(_gasTempDeriv, self.Tg, \
                                  np.array([tFin-tOut1[-1]]), \
-                                 args=(self, c1Grav, thin, LTE, \
+                                 args=(self, c1Grav, c1Turb, thin, LTE, \
                                            escapeProbGeom, PsiUser, \
                                            noClump, isobar, \
                                            dampFactor, verbose))
@@ -1777,34 +1813,7 @@ class cloud(object):
                        (1.0 + 0.375*tauDust)
         if intOnly == True:
             return intIntensity
-        
-        ###### THIS IS THE OLD, INCORRECT WAY ##############################
-        # Step 5. Convert to velocity-integrated brightness
-        # temperature; note the division by 10^5 to convert from cm
-        # s^-1 to km s^-1; also not the special handling of negative
-        # integrated intensities, corresponding to lines where there
-        # is absorption of the background CMB. By convention we assign
-        # these negative brightness temperatures, with a magnitude
-        # equal to the brightness temperature of the absolute value of
-        # the intensity
-        # intIntensityMask = intIntensity.copy()
-        # intIntensityMask[intIntensity <= 0] = small
-        # TB = h*self.emitters[emitName].data.freq[u,l]/kB / \
-        #    np.log(1+2*h*em.data.freq[u,l]**3 / (c**2*intIntensityMask)) * \
-        #            c / (em.data.freq[u,l]) \
-        #            / 1e5
-        # TB[intIntensity == 0] = 0.0
-        # mask = np.where(intIntensity < 0)
-        # TB[mask] = \
-        #    -h*self.emitters[emitName].data.freq[u[mask],l[mask]]/kB / \
-        #    np.log(1+2*h*em.data.freq[u[mask],l[mask]]**3 / \
-        #            (-c**2*intIntensity[mask])) * \
-        #            c / (em.data.freq[u[mask],l[mask]]) \
-        #            / 1e5
-        #if TBOnly == True:
-        #    return TB
-        ############################################################   
-        
+
         # Step 5. Convert to velocity-integrated brightness
         # temperature; the conversion here is obtained by
         # approximating the line shape as a delta function, and then
@@ -1813,7 +1822,7 @@ class cloud(object):
         # function line shape -- credit to Enrico di Teodoro for
         # catching a conceptual error in the original implementation
         TB = c**3 * intIntensity / \
-             (2 * kB * self.emitters[emitName].data.freq[u,l]**3)
+            (2 * kB * self.emitters[emitName].data.freq[u,l]**3)
         # Divide by 10^5 to convert from K cm/s to K km/s
         TB = TB / 1e5
         if TBOnly == True:
@@ -1850,7 +1859,8 @@ class cloud(object):
     # despotic.chemistry.setChemEq.setChemEq
     #####################################################################
     def setChemEq(self, tEqGuess=None, network=None, info=None,
-                  addEmitters=False, tol=1e-6, maxTime=1e16,
+                  addEmitters=False, energySkip=None,
+                  tol=1e-6, maxTime=1e16,
                   verbose=False, smallabd=1e-15, convList=None, 
                   evolveTemp='fixed', isobaric=False,
                   tempEqParam=None, dEdtParam=None, maxTempIter=50):
@@ -1875,6 +1885,11 @@ class cloud(object):
               be added; if False, abundances of emitters already in the
               emitter list will be updated, but new emiters will not be
               added to the cloud
+           energySkip : None | list
+               any emitter in the energySkip list will be added to the
+               cloud with its energySkip parameter set to True, meaning
+               that the species will be omitted for the purposes of
+               calculating cloud heating and cooling (but that one can
            evolveTemp : 'fixed' | 'iterate' | 'iterateDust' | 'gasEq' | 'fullEq' | 'evol'
               how to treat the temperature evolution during the chemical
               evolution; 'fixed' = treat tempeature as fixed; 'iterate' =
@@ -1936,12 +1951,20 @@ class cloud(object):
            not the calculation converges.
         """
 
-        return setChemEq(self, tEqGuess=tEqGuess, network=network,
-                         info=info, tol=tol, maxTime=maxTime,
-                         verbose=verbose, smallabd=smallabd, 
-                         convList=convList, addEmitters=addEmitters,
+        return setChemEq(self,
+                         tEqGuess=tEqGuess,
+                         network=network,
+                         info=info,
+                         tol=tol,
+                         maxTime=maxTime,
+                         verbose=verbose,
+                         smallabd=smallabd, 
+                         convList=convList,
+                         addEmitters=addEmitters,
+                         energySkip=energySkip,
                          evolveTemp=evolveTemp,
-                         isobaric=isobaric, tempEqParam=tempEqParam,
+                         isobaric=isobaric,
+                         tempEqParam=tempEqParam,
                          dEdtParam=dEdtParam,
                          maxTempIter=maxTempIter)
 
@@ -1952,7 +1975,8 @@ class cloud(object):
 ########################################################################
     def chemEvol(self, tFin, tInit=0.0, nOut=100, dt=None,
                  tOut=None, network=None, info=None,
-                 addEmitters=False, evolveTemp='fixed',
+                 addEmitters=False, energySkip=None,
+                 evolveTemp='fixed',
                  isobaric=False, tempEqParam=None,
                  dEdtParam=None):
         """
@@ -1985,6 +2009,12 @@ class cloud(object):
                be added; if False, abundances of emitters already in the
                emitter list will be updated, but new emiters will not be
                added to the cloud
+           energySkip : None | list
+               any emitter in the energySkip list will be added to the
+               cloud with its energySkip parameter set to True, meaning
+               that the species will be omitted for the purposes of
+               calculating cloud heating and cooling (but that one can
+               still compute emission from it)
            evolveTemp : 'fixed' | 'gasEq' | 'fullEq' | 'evol'
               how to treat the temperature evolution during the
               chemical evolution; 'fixed' = treat tempeature as fixed;
@@ -2027,11 +2057,18 @@ class cloud(object):
            have a defined chemical network associated with it
         """
 
-        return chemEvol(self, tFin, tInit=tInit, nOut=nOut,
-                        dt=dt, tOut=tOut, network=network, info=info,
+        return chemEvol(self, tFin,
+                        tInit=tInit,
+                        nOut=nOut,
+                        dt=dt,
+                        tOut=tOut,
+                        network=network,
+                        info=info,
                         addEmitters=addEmitters,
+                        energySkip=energySkip,
                         evolveTemp=evolveTemp,
-                        isobaric=isobaric, tempEqParam=tempEqParam,
+                        isobaric=isobaric,
+                        tempEqParam=tempEqParam,
                         dEdtParam=dEdtParam)
 
 
@@ -2407,7 +2444,7 @@ except Exception as E:
 #        heating and cooling
 #    noClump -- Boolean; if true, clumping factors are turned off
 ########################################################################
-def _gdTempResid(logTgd, cloud, c1Grav, thin, LTE,
+def _gdTempResid(logTgd, cloud, c1Grav, c1Turb, thin, LTE,
                  escapeProbGeom, PsiUser, noClump, lumScale,
                  verbose):
 
@@ -2423,7 +2460,8 @@ def _gdTempResid(logTgd, cloud, c1Grav, thin, LTE,
               str(cloud.Tg) + " K, Td = " + str(cloud.Td) + " K...")
 
     # Get net heating / cooling rates
-    rates = cloud.dEdt(c1Grav=c1Grav, thin=thin, LTE=LTE,
+    rates = cloud.dEdt(c1Grav=c1Grav, c1Turb=c1Turb,
+                       thin=thin, LTE=LTE,
                        escapeProbGeom=escapeProbGeom,
                        sumOnly=True, PsiUser=PsiUser,
                        noClump=noClump,
@@ -2497,7 +2535,7 @@ def _dustTempResid(logTd, cloud, PsiUser, GammaSum, GammaSumMax,
 #    noClump -- Boolean; if true, clumping factors are turned off
 #    verbose -- verbose or not
 ########################################################################
-def _gasTempResid(logTg, cloud, c1Grav, thin, LTE,
+def _gasTempResid(logTg, cloud, c1Grav, c1Turb, thin, LTE,
                   escapeProbGeom, PsiUser, noClump, lumScale,
                   verbose):
 
@@ -2506,7 +2544,7 @@ def _gasTempResid(logTg, cloud, c1Grav, thin, LTE,
     cloud.Tg = max(np.exp(logTg), cloud.rad.TCMB)
 
     # Get net heating / cooling rates
-    rates = cloud.dEdt(c1Grav=c1Grav,
+    rates = cloud.dEdt(c1Grav=c1Grav, c1Turb=c1Turb,
                        thin=thin, LTE=LTE,
                        escapeProbGeom=escapeProbGeom,
                        gasOnly=True, noClump=noClump,
@@ -2543,7 +2581,7 @@ def _gasTempResid(logTg, cloud, c1Grav, thin, LTE,
 #        <= 0, this indicates the calculation is done isochorically,
 #        i.e. n = constant
 ########################################################################
-def _gasTempDeriv(Tg, time, cloud, c1Grav, thin, LTE, \
+def _gasTempDeriv(Tg, time, cloud, c1Grav, c1Turb, thin, LTE, \
                       escapeProbGeom, PsiUser, noClump, isobar, \
                       dampFactor, verbose):
 
@@ -2566,7 +2604,7 @@ def _gasTempDeriv(Tg, time, cloud, c1Grav, thin, LTE, \
     # that the level populations do not need to be recomputed here,
     # because they were already computed in solving for the dust
     # temperature value, which depends on the line heating rate
-    rates = cloud.dEdt(c1Grav=c1Grav,
+    rates = cloud.dEdt(c1Grav=c1Grav, c1Turb=c1Turb,
                        thin=thin, LTE=LTE,
                        escapeProbGeom=escapeProbGeom,
                        gasOnly=True, noClump=noClump,

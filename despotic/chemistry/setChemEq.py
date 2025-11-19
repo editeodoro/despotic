@@ -35,7 +35,8 @@ kB = physcons.k*1e7
 __small = 1e-100
 
 def setChemEq(cloud, tEqGuess=None, network=None, info=None,
-              addEmitters=False, tol=1e-6, maxTime=1e16,
+              addEmitters=False, energySkip=None,
+              tol=1e-6, maxTime=1e16,
               verbose=False, smallabd=1e-15, convList=None,
               evolveTemp='fixed', isobaric=False, tempEqParam=None,
               dEdtParam=None, maxTempIter=50):
@@ -63,6 +64,12 @@ def setChemEq(cloud, tEqGuess=None, network=None, info=None,
           be added; if False, abundances of emitters already in the
           emitter list will be updated, but new emiters will not be
           added to the cloud
+       energySkip : None | list
+          any emitter in the energySkip list will be added to the
+          cloud with its energySkip parameter set to True, meaning
+          that the species will be omitted for the purposes of
+          calculating cloud heating and cooling (but that one can
+          still compute emission from it)
        evolveTemp : 'fixed' | 'iterate' | 'iterateDust' | 'gasEq' | 'fullEq' | 'evol'
           how to treat the temperature evolution during the chemical
           evolution:
@@ -236,7 +243,8 @@ def setChemEq(cloud, tEqGuess=None, network=None, info=None,
             else:
                 out = chemEvol(cloud, t+tEvol, tInit=t, nOut=3,
                                evolveTemp='fixed', 
-                               addEmitters=addEmitters)
+                               addEmitters=addEmitters,
+                               energySkip=energySkip)
             xOut = np.array(out[1].values())
 
             # Compute residual
@@ -353,6 +361,10 @@ def setChemEq(cloud, tEqGuess=None, network=None, info=None,
     # Write results to the cloud if we converged
     if tempConverge:
         cloud.chemnetwork.applyAbundances(addEmitters=addEmitters)
+        if energySkip is not None:
+            for k in energySkip:
+                if k in cloud.emitters.keys():
+                    cloud.emitters[k].energySkip = True
 
     # Report on whether we converged
     return tempConverge

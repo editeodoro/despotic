@@ -3,3 +3,5 @@
 *.dylib
 build/
 *.DS_Store
+DESPOTIC.egg*
+*__pycache__/
